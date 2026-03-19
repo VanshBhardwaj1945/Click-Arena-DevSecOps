@@ -1,0 +1,26 @@
+# Python virtual environment - machine specific, never commit this
+.venv/
+
+# Python cache files - auto generated, not needed
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment variables - could contain secrets
+.env
+.env.local
+
+# Mac junk
+.DS_Store
+
+# Terraform state files - contain sensitive infrastructure details
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+
+# Jenkins credentials if stored locally
+jenkins/*.key
+
+# VS Code settings - personal preference, not project specific
+.vscode/
