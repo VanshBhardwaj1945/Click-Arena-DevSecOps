@@ -6,7 +6,7 @@ demonstrating a full DevSecOps pipeline on Azure.
 > The game is intentionally simple. The infrastructure is the point.
 
 ## Live Demo
-🎮 [Play the game](YOUR_AZURE_URL_HERE)
+🎮 [Play the game](click-arena.grayisland-8f5a3c3d.eastus.azurecontainerapps.io)
 
 ## What This Project Demonstrates
 
