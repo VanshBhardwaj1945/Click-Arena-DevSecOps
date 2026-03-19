@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Click Arena</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #1a1a2e; color: white; font-family: sans-serif; overflow: hidden; }
+    #arena { position: relative; width: 100vw; height: 100vh; }
+
+    #scoreboard {
+      position: fixed; top: 14px; right: 14px;
+      background: rgba(0,0,0,0.65); padding: 14px 20px;
+      border-radius: 12px; min-width: 180px; z-index: 10;
+    }
+    #scoreboard h3 { font-size: 12px; opacity: 0.5; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+    .score-row { display: flex; justify-content: space-between; gap: 24px; font-size: 15px; margin: 5px 0; }
+    .score-row.me { color: #e94560; font-weight: bold; }
+
+    #chat {
+      position: fixed; bottom: 14px; left: 14px;
+      width: 300px; z-index: 10;
+      display: none;
+      flex-direction: column; gap: 6px;
+    }
+    #chat-messages {
+      background: rgba(0,0,0,0.65);
+      border-radius: 10px; padding: 10px;
+      height: 180px; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .chat-msg { font-size: 13px; line-height: 1.4; word-break: break-word; }
+    .chat-msg .author { color: #e94560; font-weight: bold; }
+    .chat-msg.system { opacity: 0.4; font-style: italic; }
+    #chat-input-row { display: flex; gap: 6px; }
+    #chat-input {
+      flex: 1; padding: 8px 12px; font-size: 14px;
+      border-radius: 8px; border: 1.5px solid rgba(255,255,255,0.15);
+      background: rgba(0,0,0,0.65); color: white; outline: none;
+    }
+    #chat-input:focus { border-color: #e94560; }
+    #chat-send {
+      padding: 8px 14px; border-radius: 8px;
+      background: #e94560; color: white;
+      border: none; cursor: pointer; font-size: 14px;
+    }
+    #chat-send:hover { background: #ff6b81; }
+
+    .target {
+      position: absolute; width: 54px; height: 54px;
+      background: #e94560; border-radius: 50%; cursor: pointer;
+      transform: translate(-50%, -50%);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 24px; box-shadow: 0 0 20px #e9456066;
+      transition: transform 0.08s; user-select: none;
+    }
+    .target:hover  { transform: translate(-50%, -50%) scale(1.2); }
+    .target:active { transform: translate(-50%, -50%) scale(0.9); }
+
+    #join-screen {
+      position: fixed; inset: 0; background: #1a1a2e;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 18px; z-index: 20;
+    }
+    #join-screen h1 { font-size: 3rem; letter-spacing: -1px; }
+    #join-screen p  { opacity: 0.5; font-size: 15px; }
+    #join-screen input {
+      padding: 13px 22px; font-size: 17px; border-radius: 10px;
+      border: 2px solid #e94560; background: #16213e;
+      color: white; outline: none; text-align: center; width: 260px;
+    }
+    #join-screen input:focus { border-color: #ff6b81; }
+    #join-screen button {
+      padding: 13px 40px; font-size: 17px; border-radius: 10px;
+      background: #e94560; color: white; border: none; cursor: pointer;
+    }
+    #join-screen button:hover { background: #ff6b81; }
+    #player-count { position: fixed; top: 14px; left: 14px; font-size: 13px; opacity: 0.4; }
+  </style>
+</head>
+<body>
+
+  <div id="join-screen">
+    <h1>Click Arena</h1>
+    <p>Click the targets. Outscore everyone. Real-time multiplayer.</p>
+    <input id="name-input" placeholder="Enter your name" maxlength="16" autocomplete="off"/>
+    <button onclick="joinGame()">Play</button>
+  </div>
+
+  <div id="arena"></div>
+
+  <div id="scoreboard">
+    <h3>Leaderboard</h3>
+    <div id="scores"></div>
+  </div>
+
+  <div id="player-count">0 players online</div>
+
+  <div id="chat">
+    <div id="chat-messages"></div>
+    <div id="chat-input-row">
+      <input id="chat-input" placeholder="Say something..." maxlength="120" autocomplete="off"/>
+      <button id="chat-send" onclick="sendChat()">Send</button>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+  <script>
+    const socket = io();
+    const arena  = document.getElementById('arena');
+    let myId     = null;
+
+    document.getElementById('name-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') joinGame();
+    });
+
+    function joinGame() {
+      const name = document.getElementById('name-input').value.trim();
+      if (!name) return;
+      socket.emit('join', { name });
+      document.getElementById('join-screen').style.display = 'none';
+      document.getElementById('chat').style.display = 'flex';
+    }
+
+    socket.on('your_id', (data) => { myId = data.id; });
+
+    function drawTarget(t) {
+      if (document.getElementById('t-' + t.id)) return;
+      const el = document.createElement('div');
+      el.className  = 'target';
+      el.id         = 't-' + t.id;
+      el.innerText  = '🎯';
+      el.style.left = t.x + '%';
+      el.style.top  = t.y + '%';
+      el.addEventListener('click', () => {
+        socket.emit('click_target', { id: t.id });
+        el.style.pointerEvents = 'none';
+      });
+      arena.appendChild(el);
+    }
+
+    socket.on('target_added',    (t)    => drawTarget(t));
+    socket.on('current_targets', (list) => list.forEach(t => drawTarget(t)));
+    socket.on('target_removed',  (data) => {
+      const el = document.getElementById('t-' + data.id);
+      if (el) el.remove();
+    });
+
+    socket.on('scores_update', (data) => {
+      const sorted = Object.entries(data.players)
+        .sort(([,a],[,b]) => b.score - a.score);
+      document.getElementById('scores').innerHTML = sorted
+        .map(([id, p]) => `
+          <div class="score-row ${id === myId ? 'me' : ''}">
+            <span>${p.name}${id === myId ? ' (you)' : ''}</span>
+            <span>${p.score}</span>
+          </div>`).join('');
+      document.getElementById('player-count').textContent =
+        sorted.length + ' player' + (sorted.length !== 1 ? 's' : '') + ' online';
+    });
+
+    document.getElementById('chat-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') sendChat();
+    });
+
+    function sendChat() {
+      const input = document.getElementById('chat-input');
+      const text  = input.value.trim();
+      if (!text) return;
+      socket.emit('chat_message', { text });
+      input.value = '';
+    }
+
+    socket.on('chat_history', (history) => {
+      history.forEach(msg => appendMessage(msg));
+    });
+
+    socket.on('new_message', (msg) => appendMessage(msg));
+
+    function appendMessage(msg) {
+      const box = document.getElementById('chat-messages');
+      const el  = document.createElement('div');
+      if (msg.system) {
+        el.className   = 'chat-msg system';
+        el.textContent = msg.text;
+      } else {
+        el.className = 'chat-msg';
+        const author     = document.createElement('span');
+        author.className = 'author';
+        author.textContent = msg.name + ': ';
+        const text     = document.createElement('span');
+        text.textContent = msg.text;
+        el.appendChild(author);
+        el.appendChild(text);
+      }
+      box.appendChild(el);
+      box.scrollTop = box.scrollHeight;
+      while (box.children.length > 20) box.removeChild(box.firstChild);
+    }
+  </script>
+</body>
+</html>

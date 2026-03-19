@@ -12,10 +12,10 @@ COPY app/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Now copy the actual app code
-COPY app/server.py .
+COPY app/ ./app/
 
 # Tell Docker this container listens on port 5000
 EXPOSE 5000
 
 # The command that runs when the container starts
-CMD ["python3", "server.py"]
+CMD ["python3", "-m", "app.server"]

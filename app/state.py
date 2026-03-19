@@ -1,0 +1,3 @@
+players = {}
+targets = []
+messages = []
