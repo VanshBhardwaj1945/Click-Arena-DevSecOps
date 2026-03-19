@@ -14,6 +14,6 @@ register_events(socketio)
 
 if __name__ == '__main__':
     threading.Thread(target=target_spawner, args=(socketio,), daemon=True).start()
-    print("▶  Game running at http://localhost:8080")
-    print("▶  Health check at http://localhost:8080/health")
-    socketio.run(app, host='0.0.0.0', port=8080, debug=False, allow_unsafe_werkzeug=True)
+    print("▶  Game running at http://localhost:5000")
+    print("▶  Health check at http://localhost:5000/health")
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
