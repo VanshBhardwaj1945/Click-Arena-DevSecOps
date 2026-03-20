@@ -30,7 +30,7 @@
     - name: Verify response time is acceptable
       assert:
         that:
-          - health_response.elapsed.total_seconds() < 5
+          - health_response.elapsed < 5000
         fail_msg: "App is responding too slowly"
         success_msg: "Response time is acceptable"
 
