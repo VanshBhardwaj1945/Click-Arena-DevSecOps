@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Terraform
+terraform/
+
+# Jenkins
+jenkins/
+
+# Ansible
+ansible/
+
+# Git
+.git/
+.gitignore
+
+# Docs
+README.md
+
+# Mac
+.DS_Store
+
+# Environment files
+.env
+.env.local
+
+# Extra
+help.txt
