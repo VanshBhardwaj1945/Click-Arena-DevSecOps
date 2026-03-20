@@ -530,7 +530,7 @@ The `register: health_response` keyword on the `uri` task saves the full HTTP re
 ### Pipeline Output
 
 <figure>
-  <img src="docs/screenshots/03-ansible-build.png" width="600">
+  <img src="screenshots/03-ansible-build.png" width="600">
   <figcaption>Ansible playbook running inside the Jenkins pipeline — all 7 tasks passing with structured output</figcaption>
 </figure>
 
