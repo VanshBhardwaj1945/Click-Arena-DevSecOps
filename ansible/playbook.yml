@@ -1,0 +1,47 @@
+---
+- name: Post-deploy verification for Click Arena
+  hosts: localhost
+  connection: local
+
+  vars:
+    app_url: "https://click-arena.mangobush-de01fc2e.eastus.azurecontainerapps.io"
+
+  tasks:
+    - name: Wait for app to be ready
+      wait_for:
+        host: click-arena.mangobush-de01fc2e.eastus.azurecontainerapps.io
+        port: 443
+        timeout: 60
+
+    - name: Check health endpoint
+      uri:
+        url: "{{ app_url }}/health"
+        method: GET
+        status_code: 200
+      register: health_response
+
+    - name: Verify health response content
+      assert:
+        that:
+          - health_response.json.status == "ok"
+        fail_msg: "Health check failed — app returned unexpected status"
+        success_msg: "App is healthy and responding correctly"
+
+    - name: Verify response time is acceptable
+      assert:
+        that:
+          - health_response.elapsed.total_seconds() < 5
+        fail_msg: "App is responding too slowly"
+        success_msg: "Response time is acceptable"
+
+    - name: Verify health response has expected fields
+      assert:
+        that:
+          - health_response.json.players is defined
+          - health_response.json.targets is defined
+        fail_msg: "Health response is missing expected fields"
+        success_msg: "Health response contains all expected fields"
+
+    - name: Print health response
+      debug:
+        msg: "Health response: {{ health_response.json }}"       

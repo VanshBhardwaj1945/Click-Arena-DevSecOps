@@ -66,6 +66,13 @@ pipeline {
                 }
             }
         }
+
+
+        stage('Ansible - Post Deployement Verification') {
+            steps {
+                sh 'ansible-playbook ansible/playbook.yml'
+            }
+        }
         
         stage('Smoke Test') {
             steps {
