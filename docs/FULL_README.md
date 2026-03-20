@@ -382,7 +382,7 @@ game_url         = "https://click-arena.mangobush-de01fc2e.eastus.azurecontainer
 Every code push triggers an automated pipeline that builds, pushes, and deploys the application to Azure without any manual steps.
 
 <figure>
-  <img src="docs/screenshots/02-Jenkins-Build-Success.png" width="400">
+  <img src="screenshots/02-Jenkins-Build-Success.png" width="400">
   <figcaption>Build history showing pipeline failures during debugging, ending in a successful green build</figcaption>
 </figure>
 
