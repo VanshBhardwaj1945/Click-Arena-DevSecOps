@@ -38,7 +38,7 @@ Code Push → Jenkins → Security Scans → Docker Build → ACR → Azure Cont
 
 ## Pipeline
 
-<img src="docs/screenshots/02-Jenkins-Build-Success.png" width="380">
+<img src="docs/screenshots/02-Jenkins-Build-Success.png" width="379">
 
 The pipeline runs automatically on every push. Each stage must pass before the next begins.
 
