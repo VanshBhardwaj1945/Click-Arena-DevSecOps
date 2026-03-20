@@ -12,7 +12,7 @@
 A complete DevSecOps pipeline — from local development to a live, monitored, security-scanned deployment on Azure. Every tool has a real job. Nothing is a tutorial exercise.
 
 ```
-Code Push → Jenkins → Security Scans → Docker Build → ACR → Azure Container Apps → Live
+Code Push → Jenkins → Docker Build → ACR → Azure Container Apps → Ansible Verify → Live
 ```
 
 ---
@@ -44,16 +44,35 @@ The pipeline runs automatically on every push. Each stage must pass before the n
 
 | Stage | Status |
 |---|---|
-| Checkout from GitHub | ✅ |
-| Build Docker image | ✅ |
-| Push to Azure Container Registry | ✅ |
-| Deploy to Azure Container Apps | ✅ |
-| Smoke test (`/health` endpoint) | ✅ |
-| Ansible post-deploy verification | 🔧 In progress |
-| SonarQube SAST scan | 🔧 In progress |
-| Snyk dependency scan | 🔧 In progress |
-| Trivy container scan | 🔧 In progress |
-| OWASP ZAP DAST scan | 🔧 In progress |
+| Checkout from GitHub | ✅ Complete |
+| Build Docker image | ✅ Complete |
+| Push to Azure Container Registry | ✅ Complete |
+| Deploy to Azure Container Apps | ✅ Complete |
+| Ansible post-deploy verification | ✅ Complete |
+| Smoke test (`/health` endpoint) | ✅ Complete |
+| SonarQube SAST scan | 🔧 Coming |
+| Snyk dependency scan | 🔧 Coming |
+| Trivy container scan | 🔧 Coming |
+| OWASP ZAP DAST scan | 🔧 Coming |
+
+---
+
+## Ansible Verification
+
+After every deploy, Ansible runs a structured verification playbook against the live Azure URL before the pipeline is marked green.
+
+<img src="docs/screenshots/03-ansible-build.png" width="600">
+
+```
+TASK [Wait for app to be ready] ........... ok
+TASK [Check health endpoint] .............. ok
+TASK [Verify health response content] ..... ok — "App is healthy and responding correctly"
+TASK [Verify response time is acceptable] . ok — "Response time is acceptable"
+TASK [Verify health response has expected fields] ok — "Health response contains all expected fields"
+TASK [Print health response] .............. ok — {'players': 0, 'status': 'ok', 'targets': 3}
+
+localhost: ok=7  changed=0  unreachable=0  failed=0  skipped=0
+```
 
 ---
 

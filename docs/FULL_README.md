@@ -30,7 +30,12 @@
    - [Pipeline Stages](#pipeline-stages)
    - [Credentials Management](#credentials-management)
    - [Running the Pipeline](#running-the-pipeline)
-10. [What's Next](#whats-next)
+10. [Post-Deploy Verification with Ansible](#post-deploy-verification-with-ansible)
+    - [Why Ansible](#why-ansible)
+    - [Playbook Structure](#playbook-structure)
+    - [Verification Tasks](#verification-tasks)
+    - [Pipeline Output](#pipeline-output)
+11. [What's Next](#whats-next)
 
 ---
 
@@ -50,6 +55,7 @@ Click Arena is a real-time multiplayer browser game built as a vehicle for learn
 - Serverless container hosting with Azure Container Apps
 - Infrastructure as Code with Terraform
 - CI/CD automation with Jenkins
+- Post-deploy verification with Ansible
 - Cost-conscious Azure architecture (scales to zero when idle)
 
 ---
@@ -77,7 +83,7 @@ This is being built and documented as a hands-on learning project while studying
 | Azure Log Analytics Workspace | Log collection for Container Apps |
 | Terraform | Infrastructure as Code |
 | Jenkins | CI/CD pipeline orchestration |
-| Ansible | Post-deploy verification *(coming)* |
+| Ansible | Post-deploy verification |
 | SonarQube | Static code analysis / SAST *(coming)* |
 | Snyk | Dependency vulnerability scanning / SCA *(coming)* |
 | Trivy | Container image security scanning *(coming)* |
@@ -107,7 +113,7 @@ click-arena/
 │   ├── variables.tf           # Input variable declarations
 │   └── outputs.tf             # Outputs printed after apply
 ├── ansible/
-│   └── playbook.yml           # Post-deploy verification (coming)
+│   └── playbook.yml           # Post-deploy verification playbook
 ├── jenkins/
 │   └── Jenkinsfile            # CI/CD pipeline definition
 ├── docs/
@@ -377,7 +383,7 @@ Every code push triggers an automated pipeline that builds, pushes, and deploys 
 
 <figure>
   <img src="docs/screenshots/02-Jenkins-Build-Success.png" width="400">
-  <figcaption>Build history showing pipeline failures during debugging, ending in a successful green build (#9)</figcaption>
+  <figcaption>Build history showing pipeline failures during debugging, ending in a successful green build</figcaption>
 </figure>
 
 ### Why Jenkins
@@ -393,6 +399,8 @@ Jenkins runs as a Docker container locally:
 ```bash
 docker run -d \
   --name jenkins \
+  -u root \
+  --restart unless-stopped \
   -p 8090:8080 \
   -p 50000:50000 \
   -v jenkins_home:/var/jenkins_home \
@@ -400,23 +408,20 @@ docker run -d \
   jenkins/jenkins:lts
 ```
 
-The `-v /var/run/docker.sock` flag gives Jenkins access to the host Docker daemon so it can build and push images from inside the container. The Azure CLI was installed directly inside the Jenkins container to avoid the session isolation problem that occurs when using the `mcr.microsoft.com/azure-cli` Docker image for each command — each `docker run` starts a fresh unauthenticated container, so login state doesn't carry between commands.
+Running as root (`-u root`) ensures persistent Docker socket access — without it the socket permissions reset on every container restart. The Azure CLI and Ansible are installed directly inside the container after first launch:
 
 ```bash
-# Install Docker CLI inside Jenkins
-docker exec -it --user root jenkins apt-get install -y docker.io
+# Install Docker CLI
+docker exec -it jenkins apt-get install -y docker.io
 
-# Install Azure CLI inside Jenkins
-docker exec -it --user root jenkins bash -c "curl -sL https://aka.ms/InstallAzureCLIDeb | bash"
+# Install Azure CLI
+docker exec -it jenkins bash -c "curl -sL https://aka.ms/InstallAzureCLIDeb | bash"
 
-# Fix Docker socket permissions
-docker exec -it --user root jenkins chmod 666 /var/run/docker.sock
-```
+# Install Ansible
+docker exec -it jenkins apt-get install -y ansible
 
-Jenkins is configured to auto-restart with Docker Desktop:
-
-```bash
-docker update --restart unless-stopped jenkins
+# Allow git to operate on the workspace directory
+docker exec jenkins git config --global --add safe.directory '*'
 ```
 
 ### Pipeline Stages
@@ -431,6 +436,7 @@ The pipeline is defined as code in the `Jenkinsfile` and runs automatically on a
 | Build Docker Image | Builds and tags the container image with the build number |
 | Push to ACR | Authenticates to ACR and pushes the tagged image |
 | Deploy to Container App | Logs into Azure via Service Principal and updates the running container |
+| Ansible — Post Deploy Verification | Runs the Ansible playbook against the live URL |
 | Smoke Test | Waits 15 seconds then hits `/health` to confirm the app is alive |
 
 Each build produces a versioned image tag — `v1`, `v2`, `v3` etc — based on the Jenkins build number. This means every deployment is traceable to a specific build.
@@ -463,11 +469,94 @@ The pipeline polls GitHub every minute and triggers automatically when new commi
 
 | Issue | Resolution |
 |---|---|
-| Docker permission denied | Jenkins user lacked access to the Docker socket — fixed with `chmod 666 /var/run/docker.sock` |
+| Docker permission denied | Running Jenkins as root (`-u root`) gives permanent Docker socket access without needing `chmod` on every restart |
 | `az login` state not shared between containers | Each `docker run mcr.microsoft.com/azure-cli` starts a fresh unauthenticated session — fixed by installing Azure CLI directly inside Jenkins so login persists across commands in the same shell |
+| Git safe directory error after container recreation | Workspace directory ownership mismatch — fixed with `git config --global --add safe.directory '*'` inside the container |
 | Build number auto-increments | `IMAGE_TAG = "v${BUILD_NUMBER}"` uses Jenkins' built-in counter — every build produces a new unique image tag automatically |
 
-> *The Docker socket permission issue was the first failure encountered. The `usermod -aG docker jenkins` command adds Jenkins to the docker group but the group change requires a container restart to take effect — and even after restarting, the socket on macOS is a symlink that doesn't always respect group membership the same way a native Linux socket would. The direct `chmod 666` on the socket file was the reliable fix.*
+> *Recreating the Jenkins container (required when switching to `-u root`) wipes the installed packages but preserves all jobs, credentials, and build history via the `jenkins_home` volume. Docker, Azure CLI, and Ansible need to be reinstalled after any container recreation — this is expected behaviour and a good argument for building a custom Jenkins Docker image with all tools pre-baked in for production use.*
+
+---
+
+## Post-Deploy Verification with Ansible
+
+After Jenkins deploys a new container version, Ansible runs a structured verification playbook against the live Azure URL before the pipeline is marked green.
+
+**Source:** [`ansible/playbook.yml`](./ansible/playbook.yml)
+
+### Why Ansible
+
+The Jenkins smoke test (`curl -f /health`) catches a completely broken deployment — if the app returns anything other than 200 the pipeline fails. But it doesn't verify the response content, check specific fields, or measure response time. Ansible runs a deeper pass with named tasks and structured output, making it clear exactly what was checked and what passed.
+
+The second reason is tool diversity. A curl check in a Jenkinsfile proves shell scripting. An Ansible playbook proves configuration management — a separate skill that appears in almost every DevOps and DevSecOps job description.
+
+Ansible is also agentless — it doesn't require anything installed on the target. It runs locally on Jenkins and makes HTTP requests to the Azure URL over the public internet. No SSH, no remote agent, no additional setup.
+
+### Playbook Structure
+
+```yaml
+---
+- name: Post-deploy verification for Click Arena
+  hosts: localhost
+  connection: local
+
+  vars:
+    app_url: "https://click-arena.mangobush-de01fc2e.eastus.azurecontainerapps.io"
+
+  tasks:
+    - name: Wait for app to be ready
+    - name: Check health endpoint
+    - name: Verify health response content
+    - name: Verify response time is acceptable
+    - name: Verify health response has expected fields
+    - name: Print health response
+```
+
+`hosts: localhost` and `connection: local` mean all tasks run on the Jenkins machine itself — no SSH or remote inventory needed. The `vars` block defines the app URL once so it can be referenced throughout the playbook as `{{ app_url }}`.
+
+### Verification Tasks
+
+| Task | Module | What it checks |
+|---|---|---|
+| Wait for app to be ready | `wait_for` | Port 443 accepts connections within 60 seconds |
+| Check health endpoint | `uri` | GET `/health` returns HTTP 200 |
+| Verify health response content | `assert` | Response JSON contains `status: ok` |
+| Verify response time | `assert` | Response time under 5000ms |
+| Verify expected fields | `assert` | Response contains `players` and `targets` fields |
+| Print health response | `debug` | Prints full response to pipeline logs |
+
+The `register: health_response` keyword on the `uri` task saves the full HTTP response — headers, body, status code, elapsed time — into a variable that all subsequent `assert` tasks can inspect.
+
+### Pipeline Output
+
+<figure>
+  <img src="docs/screenshots/03-ansible-build.png" width="600">
+  <figcaption>Ansible playbook running inside the Jenkins pipeline — all 7 tasks passing with structured output</figcaption>
+</figure>
+
+The actual pipeline output from a successful run:
+
+```
+TASK [Wait for app to be ready] ........... ok: [localhost]
+TASK [Check health endpoint] .............. ok: [localhost]
+TASK [Verify health response content] ..... ok: [localhost]
+  "msg": "App is healthy and responding correctly"
+TASK [Verify response time is acceptable] . ok: [localhost]
+  "msg": "Response time is acceptable"
+TASK [Verify health response has expected fields] ok: [localhost]
+  "msg": "Health response contains all expected fields"
+TASK [Print health response] .............. ok: [localhost]
+  "msg": "Health response: {'players': 0, 'status': 'ok', 'targets': 3}"
+
+PLAY RECAP
+localhost: ok=7  changed=0  unreachable=0  failed=0  skipped=0
+```
+
+**Key issue resolved:**
+
+| Issue | Resolution |
+|---|---|
+| `elapsed.total_seconds()` failed | In this version of Ansible, `elapsed` is an integer (milliseconds) not a Python `timedelta` object — changed the condition to `elapsed < 5000` |
 
 ---
 
@@ -475,7 +564,6 @@ The pipeline polls GitHub every minute and triggers automatically when new commi
 
 The following pipeline stages are being added:
 
-- **Ansible** — post-deploy playbook that hits the `/health` endpoint, verifies the response, and confirms the deployment succeeded before marking the pipeline green
 - **SonarQube** — static analysis of the Python code, expected to flag the hardcoded `SECRET_KEY` and insufficient chat input sanitization
 - **Snyk** — dependency scanning of Flask and Flask-SocketIO for known CVEs
 - **Trivy** — container image scanning for OS-level vulnerabilities in the `python:3.11-slim` base image
