@@ -48,25 +48,27 @@ pipeline {
                 withCredentials([
                     string(credentialsId: 'AZURE_CREDENTIALS', variable: 'AZ_CREDS')
                 ]) {
-                    sh '''
-                        CLIENT_ID=$(echo $AZ_CREDS | python3 -c "import sys,json; print(json.load(sys.stdin)['clientId'])")
-                        CLIENT_SECRET=$(echo $AZ_CREDS | python3 -c "import sys,json; print(json.load(sys.stdin)['clientSecret'])")
-                        TENANT_ID=$(echo $AZ_CREDS | python3 -c "import sys,json; print(json.load(sys.stdin)['tenantId'])")
+stage('Deploy to Container App') {
+    steps {
+        echo '--- Deploying to Azure Container App ---'
+        withCredentials([
+            string(credentialsId: 'AZURE_CREDENTIALS', variable: 'AZ_CREDS')
+        ]) {
+            sh '''
+                CLIENT_ID=$(echo $AZ_CREDS | python3 -c "import sys,json; print(json.load(sys.stdin)['clientId'])")
+                CLIENT_SECRET=$(echo $AZ_CREDS | python3 -c "import sys,json; print(json.load(sys.stdin)['clientSecret'])")
+                TENANT_ID=$(echo $AZ_CREDS | python3 -c "import sys,json; print(json.load(sys.stdin)['tenantId'])")
 
-                        docker run --rm \
-                            mcr.microsoft.com/azure-cli \
-                            az login --service-principal \
-                                --username $CLIENT_ID \
-                                --password $CLIENT_SECRET \
-                                --tenant $TENANT_ID
-
-                        docker run --rm \
-                            mcr.microsoft.com/azure-cli \
-                            az containerapp update \
-                                --name click-arena \
-                                --resource-group click-arena-rg \
-                                --image clickarenaregistry.azurecr.io/click-arena:v4
-                    '''
+                docker run --rm \
+                    -e SP_CLIENT_ID=$CLIENT_ID \
+                    -e SP_CLIENT_SECRET=$CLIENT_SECRET \
+                    -e SP_TENANT_ID=$TENANT_ID \
+                    mcr.microsoft.com/azure-cli \
+                    bash -c "az login --service-principal --username \$SP_CLIENT_ID --password \$SP_CLIENT_SECRET --tenant \$SP_TENANT_ID && az containerapp update --name click-arena --resource-group click-arena-rg --image clickarenaregistry.azurecr.io/click-arena:v5"
+            '''
+        }
+    }
+}
                 }
             }
         }
