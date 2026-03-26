@@ -47,16 +47,18 @@ pipeline {
                 ]) {
                     sh '''
                         cd app
+                        pip3 install -r requirements.txt --quiet
                         snyk auth $SNYK_TOKEN
                         snyk test --file=requirements.txt \
                             --package-manager=pip \
+                            --command=python3 \
+                            --skip-unresolved \
                             --severity-threshold=high \
                             || true
                     '''
                 }
             }
         }
-
         stage('Build Docker Image') {
             steps {
                 echo '--- Building Docker Image ---'
