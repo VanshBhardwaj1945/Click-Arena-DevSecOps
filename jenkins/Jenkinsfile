@@ -38,6 +38,25 @@ pipeline {
             }
         }
 
+
+        stage('SCA — Snyk') {
+            steps {
+                echo '--- Dependency vulnerability scan ---'
+                withCredentials([
+                    string(credentialsId: 'SNYK_TOKEN', variable: 'SNYK_TOKEN')
+                ]) {
+                    sh '''
+                        cd app
+                        snyk auth $SNYK_TOKEN
+                        snyk test --file=requirements.txt \
+                            --package-manager=pip \
+                            --severity-threshold=high \
+                            || true
+                    '''
+                }
+            }
+        }
+
         stage('Build Docker Image') {
             steps {
                 echo '--- Building Docker Image ---'
