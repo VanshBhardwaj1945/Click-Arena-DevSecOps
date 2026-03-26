@@ -49,7 +49,6 @@ pipeline {
                         snyk test --file=app/requirements.txt \
                             --package-manager=pip \
                             --skip-unresolved \
-                            --severity-threshold=high \
                             || true
                     '''
                 }
