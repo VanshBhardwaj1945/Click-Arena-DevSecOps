@@ -38,7 +38,6 @@ pipeline {
             }
         }
 
-
         stage('SCA — Snyk') {
             steps {
                 echo '--- Dependency vulnerability scan ---'
@@ -46,12 +45,9 @@ pipeline {
                     string(credentialsId: 'SNYK_TOKEN', variable: 'SNYK_TOKEN')
                 ]) {
                     sh '''
-                        cd app
-                        pip install -r requirements.txt --quiet
                         snyk auth $SNYK_TOKEN
-                        snyk test --file=requirements.txt \
+                        snyk test --file=app/requirements.txt \
                             --package-manager=pip \
-                            --command=python3 \
                             --skip-unresolved \
                             --severity-threshold=high \
                             || true
@@ -59,6 +55,7 @@ pipeline {
                 }
             }
         }
+
         stage('Build Docker Image') {
             steps {
                 echo '--- Building Docker Image ---'
