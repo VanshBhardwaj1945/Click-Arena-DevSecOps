@@ -19,6 +19,25 @@ pipeline {
             }
         }
 
+        stage('SAST — SonarQube') {
+            steps {
+                echo '--- Static code analysis ---'
+                withCredentials([
+                    string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')
+                ]) {
+                    sh '''
+                        sonar-scanner \
+                            -Dsonar.projectKey=click-arena \
+                            -Dsonar.sources=./app \
+                            -Dsonar.host.url=http://host.docker.internal:9000 \
+                            -Dsonar.login=$SONAR_TOKEN \
+                            -Dsonar.python.version=3 \
+                            -Dsonar.exclusions=**/__pycache__/**,**/*.pyc
+                    '''
+                }
+            }
+        }
+
         stage('Build Docker Image') {
             steps {
                 echo '--- Building Docker Image ---'
@@ -73,6 +92,8 @@ pipeline {
                 sh 'ansible-playbook ansible/playbook.yml'
             }
         }
+
+
         
         stage('Smoke Test') {
             steps {
