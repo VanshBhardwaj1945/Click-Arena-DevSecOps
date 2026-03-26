@@ -7,7 +7,13 @@ from app.game import register_events, target_spawner
 
 app = Flask(__name__, template_folder=os.path.join(os.path.dirname(__file__), 'templates'))
 app.config['SECRET_KEY'] = 'devsecops-weekend'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+app.config['WTF_CSRF_ENABLED'] = True
+
+socketio = SocketIO(app, cors_allowed_origins=[
+    "https://click-arena.mangobush-de01fc2e.eastus.azurecontainerapps.io",
+    "http://localhost:8080",
+    "http://localhost:5000"
+], async_mode='threading')
 
 register_routes(app)
 register_events(socketio)
