@@ -9,10 +9,10 @@
 
 ## What this demonstrates
 
-A complete DevSecOps pipeline — from local development to a live, monitored, security-scanned deployment on Azure. Every tool has a real job. Nothing is a tutorial exercise.
+A complete DevSecOps pipeline — from local development to a live, security-scanned deployment on Azure. Every tool has a real job. Nothing is a tutorial exercise.
 
 ```
-Code Push → Jenkins → Docker Build → ACR → Azure Container Apps → Ansible Verify → Live
+Code Push → Jenkins → SonarQube → Snyk → Docker Build → Trivy → ACR → Deploy → Ansible → Live
 ```
 
 ---
@@ -27,9 +27,9 @@ Code Push → Jenkins → Docker Build → ACR → Azure Container Apps → Ansi
 | **Infrastructure** | Terraform, Azure CLI |
 | **CI/CD** | Jenkins (self-hosted, pipeline as code) |
 | **Config & Verify** | Ansible |
-| **SAST** | SonarQube *(coming)* |
-| **Dependency Scan** | Snyk *(coming)* |
-| **Container Scan** | Trivy *(coming)* |
+| **SAST** | SonarQube |
+| **Dependency Scan** | Snyk |
+| **Container Scan** | Trivy |
 | **DAST** | OWASP ZAP *(coming)* |
 | **Monitoring** | Azure Monitor + Grafana *(coming)* |
 | **Secrets** | Azure Key Vault *(coming)* |
@@ -45,15 +45,27 @@ The pipeline runs automatically on every push. Each stage must pass before the n
 | Stage | Status |
 |---|---|
 | Checkout from GitHub | ✅ Complete |
+| SAST — SonarQube code scan | ✅ Complete |
+| SCA — Snyk dependency scan | ✅ Complete |
 | Build Docker image | ✅ Complete |
+| Container Scan — Trivy | ✅ Complete |
 | Push to Azure Container Registry | ✅ Complete |
 | Deploy to Azure Container Apps | ✅ Complete |
 | Ansible post-deploy verification | ✅ Complete |
 | Smoke test (`/health` endpoint) | ✅ Complete |
-| SonarQube SAST scan | 🔧 Coming |
-| Snyk dependency scan | 🔧 Coming |
-| Trivy container scan | 🔧 Coming |
 | OWASP ZAP DAST scan | 🔧 Coming |
+
+---
+
+## Security Scanning
+
+Three security tools run automatically in the pipeline before any code reaches Azure.
+
+**SonarQube (SAST)** scans the Python source code for bugs and vulnerabilities without running it. Found 5 security hotspots and 1 bug on the first scan — including a CSRF finding on the SocketIO configuration and a missing `lang` attribute accessibility bug. The CSRF finding was resolved by restricting `cors_allowed_origins` to known URLs. The remaining hotspots (pseudorandom number generator usage for game target positions) were reviewed and marked as safe — `random.randint()` has no security implication in a non-cryptographic game context.
+
+**Snyk (SCA)** scans `requirements.txt` for known CVEs in Flask, Flask-SocketIO, and their transitive dependencies. Runs on every build and reports findings without blocking the pipeline.
+
+**Trivy (Container Scan)** scans the built Docker image for OS-level vulnerabilities in the `python:3.11-slim` base image. Reports HIGH and CRITICAL severity findings — these exist in any base image and represent the real-world tradeoff between image recency and stability.
 
 ---
 

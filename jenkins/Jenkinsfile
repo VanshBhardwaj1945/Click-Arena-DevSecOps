@@ -63,6 +63,19 @@ pipeline {
             }
         }
 
+        stage('Container Scan — Trivy') {
+            steps {
+                echo '--- Scanning container image for CVEs ---'
+                sh '''
+                    trivy image \
+                        --exit-code 0 \
+                        --severity HIGH,CRITICAL \
+                        --format table \
+                        click-arena:${IMAGE_TAG}
+                '''
+            }
+        }
+
         stage('Push to ACR') {
             steps {
                 echo '--- Pushing to Azure Container Registry ---'
