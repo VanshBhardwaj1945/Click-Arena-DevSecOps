@@ -111,7 +111,7 @@ pipeline {
                         az containerapp update \
                             --name click-arena \
                             --resource-group click-arena-rg \
-                            --image clickarenaregistry.azurecr.io/click-arena:v5
+                            --image ${ACR_LOGIN}/${IMAGE_NAME}:${IMAGE_TAG}
                     '''
                 }
             }
