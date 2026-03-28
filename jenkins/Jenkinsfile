@@ -136,6 +136,20 @@ pipeline {
             }
         }
 
+        stage('DAST — OWASP ZAP') {
+            steps {
+                echo '--- Dynamic security scan against live app ---'
+                sh '''
+                    docker run --rm \
+                        ghcr.io/zaproxy/zaproxy:stable \
+                        zap-baseline.py \
+                        -t https://click-arena.mangobush-de01fc2e.eastus.azurecontainerapps.io \
+                        -r zap-report.html \
+                        || true
+                '''
+            }
+        }
+
     }
 
     post {

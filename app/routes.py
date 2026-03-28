@@ -12,9 +12,9 @@ def register_routes(app):
 
     @app.route('/stats')
     def stats():
-        from app.state import players, chat_history
+        from app.state import players, messages
         return {
             "active_players": len(players),
-            "messages_sent": len(chat_history),
+            "messages_sent": len(messages),
             "status": "live"
         }
