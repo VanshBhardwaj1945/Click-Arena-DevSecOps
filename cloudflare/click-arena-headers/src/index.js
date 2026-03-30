@@ -8,21 +8,42 @@ const PUBLIC_PATHS = ['/', '/health', '/favicon.ico'];
 const VALID_API_KEYS = new Set(['sk_arena_dev_123', 'sk_arena_prod_456']);
 const stats = { allowed: 0, blocked: 0, total: 0 };
 
+async function forwardToAzure(azureUrl, req) {
+	const azureResponse = await fetch(azureUrl, {
+		method: req.method,
+		headers: req.headers,
+		body: req.method !== 'GET' ? req.body : null
+	});
+
+	const newResponse = new Response(azureResponse.body, azureResponse);
+
+	newResponse.headers.set('X-Frame-Options', 'DENY');
+	newResponse.headers.set('X-Content-Type-Options', 'nosniff');
+	newResponse.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+	newResponse.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+	newResponse.headers.set('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'");
+
+	return newResponse;
+}
+
+
 export default {
 	async fetch(req) {
 		const url = new URL(req.url);
 		const path = url.pathname;
-
+		const azureUrl = 'https://click-arena.mangobush-de01fc2e.eastus.azurecontainerapps.io' + path;
 		stats.total += 1;
+		const isPublic = PUBLIC_PATHS.includes(path) || path.startsWith('/socket.io');
 
-		if (PUBLIC_PATHS.includes(path)) {
-			return new Response("Public path - Allowed")
+		if (isPublic) {
+			return forwardToAzure(azureUrl, req);
+			
 		} 
 		else {
 			const apiKey = req.headers.get('X-API-Key')
 			if (VALID_API_KEYS.has(apiKey)) {
 				stats.allowed += 1;
-				return new Response("Allowed")
+        		return forwardToAzure(azureUrl, req);
 			}
 			else {
 				stats.blocked += 1;
@@ -32,18 +53,22 @@ export default {
 		}
 	},
 
-	// The scheduled handler is invoked at the interval set in our wrangler.jsonc's
-	// [[triggers]] configuration.
-	async scheduled(event, env, ctx) {
-		// A Cron Trigger can make requests to other endpoints on the Internet,
-		// publish to a Queue, query a D1 Database, and much more.
-		//
-		// We'll keep it simple and make an API call to a Cloudflare API:
-		let resp = await fetch('https://api.cloudflare.com/client/v4/ips');
-		let wasSuccessful = resp.ok ? 'success' : 'fail';
 
-		// You could store this result in KV, write to a D1 Database, or publish to a Queue.
-		// In this template, we'll just log the result:
-		console.log(`trigger fired at ${event.cron}: ${wasSuccessful}`);
+	async scheduled(event, env, ctx) {
+
+		console.log('[AUDIT] ' + new Date().toISOString() )
+		console.log('[AUDIT] ALlowed: ' + stats.allowed)
+		console.log('[AUDIT] Blocked: ' + stats.blocked)
+		console.log('[AUDIT] Total Requests: ' + stats.total)
+
+		let blockRate
+		if (stats.total > 0) {
+			 blockRate = ((stats.blocked/stats.total) * 100).toFixed(1)
+		} else {
+			 blockRate = 0
+		}
+		console.log('[AUDIT] Block Rate :  ' + blockRate)
+
 	},
+
 };

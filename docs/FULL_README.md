@@ -7,39 +7,14 @@
 3. [Tech Stack and Tools](#tech-stack-and-tools)
 4. [Project Structure](#project-structure)
 5. [The Application](#the-application)
-   - [Flask-SocketIO Game Server](#flask-socketio-game-server)
-   - [Real-Time Chat](#real-time-chat)
-   - [Running Locally](#running-locally)
 6. [Containerization](#containerization)
-   - [Dockerfile](#dockerfile)
-   - [Building and Running with Docker](#building-and-running-with-docker)
 7. [Azure Infrastructure](#azure-infrastructure)
-   - [Resources Created](#resources-created)
-   - [Manual Setup](#manual-setup)
-   - [Pushing to Azure Container Registry](#pushing-to-azure-container-registry)
-   - [Deploying to Azure Container Apps](#deploying-to-azure-container-apps)
 8. [Infrastructure as Code with Terraform](#infrastructure-as-code-with-terraform)
-   - [Why Terraform](#why-terraform)
-   - [Terraform Project Structure](#terraform-project-structure)
-   - [Resources Managed](#resources-managed)
-   - [Importing Existing Infrastructure](#importing-existing-infrastructure)
-   - [Applying the Configuration](#applying-the-configuration)
 9. [CI/CD Pipeline with Jenkins](#cicd-pipeline-with-jenkins)
-   - [Why Jenkins](#why-jenkins)
-   - [Setup](#setup)
-   - [Pipeline Stages](#pipeline-stages)
-   - [Credentials Management](#credentials-management)
-   - [Running the Pipeline](#running-the-pipeline)
 10. [Post-Deploy Verification with Ansible](#post-deploy-verification-with-ansible)
-    - [Why Ansible](#why-ansible)
-    - [Playbook Structure](#playbook-structure)
-    - [Verification Tasks](#verification-tasks)
-    - [Pipeline Output](#pipeline-output)
 11. [Security Scanning](#security-scanning)
-    - [SAST — SonarQube](#sast--sonarqube)
-    - [SCA — Snyk](#sca--snyk)
-    - [Container Scan — Trivy](#container-scan--trivy)
-12. [What's Next](#whats-next)
+12. [Cloudflare Worker — Edge Middleware](#cloudflare-worker--edge-middleware)
+13. [What's Next](#whats-next)
 
 ---
 
@@ -63,6 +38,7 @@ Click Arena is a real-time multiplayer browser game built as a vehicle for learn
 - Static code analysis with SonarQube
 - Dependency vulnerability scanning with Snyk
 - Container image scanning with Trivy
+- Edge middleware with Cloudflare Workers
 - Cost-conscious Azure architecture (scales to zero when idle)
 
 ---
@@ -71,7 +47,7 @@ Click Arena is a real-time multiplayer browser game built as a vehicle for learn
 
 This project builds a full DevSecOps pipeline around a simple multiplayer game. Every tool in the stack has a real job — not a tutorial exercise. The game gives the pipeline something concrete to build, scan, deploy, and monitor.
 
-The pipeline covers the full lifecycle: code is scanned for vulnerabilities before it ships, packaged into a container, pushed to a private registry, deployed to Azure via infrastructure defined as code, and monitored in production. Security scanning runs automatically at every stage — static code analysis, dependency scanning, container scanning, and dynamic testing against the live URL.
+The pipeline covers the full lifecycle: code is scanned for vulnerabilities before it ships, packaged into a container, pushed to a private registry, deployed to Azure via infrastructure defined as code, and verified post-deploy. Security scanning runs automatically at every stage. A Cloudflare Worker sits at the edge adding HTTP security headers and protecting API routes.
 
 This is being built and documented as a hands-on learning project while studying for the AZ-104 exam.
 
@@ -91,12 +67,12 @@ This is being built and documented as a hands-on learning project while studying
 | Terraform | Infrastructure as Code |
 | Jenkins | CI/CD pipeline orchestration |
 | Ansible | Post-deploy verification |
+| Cloudflare Worker | Edge middleware — security headers, API key validation, cron audit |
 | SonarQube | Static code analysis / SAST |
 | Snyk | Dependency vulnerability scanning / SCA |
 | Trivy | Container image security scanning |
-| OWASP ZAP | Dynamic application security testing / DAST *(coming)* |
-| Azure Monitor + Grafana | Metrics and monitoring *(coming)* |
-| Azure Key Vault | Secret management *(coming)* |
+| OWASP ZAP | Dynamic application security testing / DAST — coming |
+| Azure Monitor + Grafana | Metrics and monitoring — coming |
 | Git / GitHub | Version control |
 | Azure CLI | Resource management and scripting |
 
@@ -109,11 +85,16 @@ click-arena/
 ├── app/
 │   ├── server.py              # Entry point — initializes Flask and SocketIO
 │   ├── game.py                # WebSocket event handlers and target spawner
-│   ├── routes.py              # HTTP routes (/, /health)
+│   ├── routes.py              # HTTP routes (/, /health, /stats)
 │   ├── state.py               # Shared in-memory game state
 │   ├── requirements.txt       # Python dependencies
 │   └── templates/
 │       └── index.html         # Game frontend — single HTML file
+├── cloudflare/
+│   └── click-arena-headers/
+│       ├── src/
+│       │   └── index.js       # Cloudflare Worker — middleware logic
+│       └── wrangler.jsonc     # Worker config — name, routes, cron schedule
 ├── terraform/
 │   ├── main.tf                # Azure resource definitions
 │   ├── providers.tf           # Terraform and AzureRM provider configuration
@@ -135,49 +116,31 @@ click-arena/
 
 ## The Application
 
-### Flask-SocketIO Game Server
-
 The server is split across four files to keep concerns separate:
 
-- `state.py` holds the shared in-memory game state — a dictionary of connected players and their scores, a list of active targets, and the last 20 chat messages. Everything resets when the server restarts. There is no database — scores are intentionally ephemeral because the pipeline is the point, not persistence.
-- `game.py` registers all WebSocket event handlers: connect, join, click_target, chat_message, and disconnect. A background thread runs continuously and keeps exactly three targets on screen at all times.
-- `routes.py` handles two HTTP routes: `/` serves the game page and `/health` returns a JSON status object that Azure and Jenkins use to confirm the app is alive.
-- `server.py` is the entry point — it initializes Flask and SocketIO, registers the routes and events from the other modules, starts the background target spawner thread, and starts the server.
-
-### Real-Time Chat
-
-Players can send messages while playing. Messages appear in real time across all connected browser tabs using WebSocket broadcasts. Join and leave events are broadcast as system messages. The server keeps the last 20 messages in memory and sends chat history to new players on connect.
-
-Chat input is intentionally left with minimal server-side sanitization — this gave SonarQube and OWASP ZAP something real to find during security scanning.
+- `state.py` holds shared in-memory game state — connected players, active targets, and the last 20 chat messages. Everything resets on restart. No database — scores are intentionally ephemeral because the pipeline is the point.
+- `game.py` registers all WebSocket event handlers: connect, join, click_target, chat_message, disconnect. A background thread keeps exactly three targets on screen at all times.
+- `routes.py` handles three HTTP routes: `/` serves the game page, `/health` returns a JSON status object used by Azure and Jenkins, `/stats` returns live game metrics and is protected by the Cloudflare Worker API key check.
+- `server.py` is the entry point — initializes Flask and SocketIO, registers routes and events, starts the background target spawner.
 
 ### Running Locally
 
 ```bash
-# Clone the repo
 git clone https://github.com/VanshBhardwaj1945/Click-Arena-DevSecOps.git
 cd Click-Arena-DevSecOps
 
-# Create and activate virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install dependencies
 pip3 install -r app/requirements.txt
-
-# Run the server
 python3 -m app.server
 # Visit http://localhost:8080
 ```
 
-Open a second tab and join with a different name to test the multiplayer and chat.
-
-> *Python 3.14 introduced a breaking change with eventlet — the async library Flask-SocketIO commonly uses. Rather than pinning to an older Python version, the server was configured to use threading mode instead (`async_mode='threading'`), which works across all Python versions and requires no additional dependencies. The server port is set to 5000 inside Docker and 8080 locally to avoid a conflict with macOS AirPlay Receiver, which occupies port 5000 by default.*
+> *Python 3.14 introduced a breaking change with eventlet. The server uses `async_mode='threading'` instead, which works across all Python versions. Port 8080 is used locally to avoid macOS AirPlay Receiver which occupies port 5000.*
 
 ---
 
 ## Containerization
-
-### Dockerfile
 
 ```dockerfile
 FROM python:3.11-slim
@@ -189,16 +152,11 @@ EXPOSE 5000
 CMD ["python3", "-m", "app.server"]
 ```
 
-`python:3.11-slim` is used rather than the system Python (3.14) because 3.11 is the current stable, widely-supported version that all libraries are tested against. Pinning the base image to a specific version is standard practice — it prevents unexpected breakage when upstream images update.
-
-Dependencies are copied and installed before the application code. Docker caches each layer — if only the code changes, Docker reuses the cached dependency layer and only rebuilds from the code copy step down. On larger projects this saves significant build time.
-
-### Building and Running with Docker
+Dependencies are copied and installed before application code — Docker caches each layer, so unchanged dependencies don't trigger a reinstall on every build.
 
 ```bash
 docker build -t click-arena .
 docker run -p 8080:5000 click-arena
-# Visit http://localhost:8080
 ```
 
 ---
@@ -215,11 +173,9 @@ docker run -p 8080:5000 click-arena
 | Container Apps Environment | `click-arena-env` | Shared hosting platform for Container Apps |
 | Container App | `click-arena` | The running game server with public ingress |
 
-All resources are in the `East US` region.
+All resources in East US. Container Apps scales to zero when idle — hosting cost is effectively zero. Only ongoing cost is ACR at approximately $5/month.
 
 ### Manual Setup
-
-All resources were initially created manually using the Azure CLI to understand what each resource does before codifying them in Terraform.
 
 ```bash
 az group create --name click-arena-rg --location eastus
@@ -247,46 +203,13 @@ az containerapp create \
   --max-replicas 3
 ```
 
-### Pushing to Azure Container Registry
-
-```bash
-az acr login --name clickarenaregistry
-docker tag click-arena clickarenaregistry.azurecr.io/click-arena:v3
-docker push clickarenaregistry.azurecr.io/click-arena:v3
-```
-
-### Deploying to Azure Container Apps
-
-```bash
-az containerapp update \
-  --name click-arena \
-  --resource-group click-arena-rg \
-  --image clickarenaregistry.azurecr.io/click-arena:v3
-```
-
-Container Apps scales to zero when idle — hosting cost is essentially zero at this scale. The only ongoing cost is ACR at approximately $5/month.
-
-> *The first deployment failed with a port mismatch — the container was listening on port 8080 but Azure expected 5000. Fixed by setting the server port to 5000 in the Dockerfile entrypoint since AirPlay Receiver is a macOS-only concern that doesn't exist inside a Linux container.*
-
 ---
 
 ## Infrastructure as Code with Terraform
 
 **Source:** [`terraform/`](./terraform/)
 
-### Why Terraform
-
-Clicking through the portal leaves no auditable record of how things were configured and makes it difficult to reproduce the environment. Terraform solves this by declaring infrastructure in code that can be committed to Git and applied consistently.
-
-### Terraform Project Structure
-
-```
-terraform/
-├── main.tf        # All Azure resource definitions
-├── providers.tf   # Terraform version and AzureRM provider configuration
-├── variables.tf   # Reusable input variables
-└── outputs.tf     # Values printed after apply (game URL, ACR login server)
-```
+All Azure infrastructure declared in version-controlled `.tf` files. `terraform destroy` tears everything down cleanly. `terraform apply` rebuilds it identically.
 
 ### Resources Managed
 
@@ -298,34 +221,14 @@ terraform/
 | `azurerm_container_app_environment` | `mainCAE` | `click-arena-env` |
 | `azurerm_container_app` | `main` | `click-arena` |
 
-### Importing Existing Infrastructure
-
-```bash
-terraform import azurerm_resource_group.mainRG \
-  /subscriptions/YOUR_SUB_ID/resourceGroups/click-arena-rg
-
-terraform import azurerm_container_registry.mainACR \
-  /subscriptions/YOUR_SUB_ID/resourceGroups/click-arena-rg/providers/Microsoft.ContainerRegistry/registries/clickarenaregistry
-
-terraform import azurerm_container_app_environment.mainCAE \
-  /subscriptions/YOUR_SUB_ID/resourceGroups/click-arena-rg/providers/Microsoft.App/managedEnvironments/click-arena-env
-
-terraform import azurerm_container_app.main \
-  /subscriptions/YOUR_SUB_ID/resourceGroups/click-arena-rg/providers/Microsoft.App/containerApps/click-arena
-```
-
-**Key issues resolved:**
+### Key Issues Resolved During Import
 
 | Issue | Resolution |
 |---|---|
 | `logs_destination` argument not valid | Removed — not supported in `azurerm` 3.x |
-| Container App Environment forced replacement | Existing environment had no Log Analytics workspace — must be recreated to add one. Accepted the replacement |
+| Container App Environment forced replacement | Existing environment had no Log Analytics workspace — Azure requires recreation to add one |
 | Environment deletion hung 20+ minutes | Used `terraform state rm` to remove stuck resource, reapplied cleanly |
-| Inconsistent resource labels | Standardized all references to `mainRG`, `mainACR`, `mainCAE` |
-
-> *Importing existing infrastructure exposed invisible configuration — portal defaults that don't match Terraform defaults, provider bugs, and API timeout behaviour that looks like a hang. Working through each issue gave a much deeper understanding of how Container Apps infrastructure is actually structured.*
-
-### Applying the Configuration
+| Inconsistent resource labels | Standardized all labels before applying |
 
 ```bash
 cd terraform
@@ -334,25 +237,16 @@ terraform plan
 terraform apply
 ```
 
-```
-Outputs:
-
-acr_login_server = "clickarenaregistry.azurecr.io"
-game_url         = "https://click-arena.mangobush-de01fc2e.eastus.azurecontainerapps.io"
-```
-
 ---
 
 ## CI/CD Pipeline with Jenkins
 
 <figure>
   <img src="screenshots/02-Jenkins-Build-Success.png" width="400">
-  <figcaption>Build history showing pipeline failures during debugging, ending in a successful green build</figcaption>
+  <figcaption>Build history showing failures during debugging, ending in a successful green build</figcaption>
 </figure>
 
-### Why Jenkins
-
-Jenkins is used instead of GitHub Actions because GitHub Actions is already on the resume from the Cloud Resume Challenge. Jenkins is a completely different skill — self-hosted, dominant in enterprise environments where pipelines cannot run on third-party infrastructure.
+Jenkins runs self-hosted in a Docker container. The pipeline executes locally and deploys to Azure via a Service Principal. Nothing runs on GitHub's servers.
 
 ### Setup
 
@@ -366,9 +260,18 @@ docker run -d \
   -v jenkins_home:/var/jenkins_home \
   -v /var/run/docker.sock:/var/run/docker.sock \
   jenkins/jenkins:lts
-```
 
-Tools installed inside the container after first launch: Docker CLI, Azure CLI, Ansible, Snyk (via npm), Trivy, SonarQube Scanner. Running as root ensures persistent Docker socket access without permission resets on restart.
+# Tools installed inside container after first launch
+docker exec -it jenkins apt-get install -y docker.io ansible trivy
+docker exec -it jenkins bash -c "curl -sL https://aka.ms/InstallAzureCLIDeb | bash"
+docker exec -it jenkins bash -c "npm install -g snyk"
+docker exec -it jenkins bash -c "
+    wget https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip -P /tmp &&
+    unzip /tmp/sonar-scanner-cli-5.0.1.3006-linux.zip -d /opt &&
+    ln -s /opt/sonar-scanner-5.0.1.3006-linux/bin/sonar-scanner /usr/local/bin/sonar-scanner
+"
+docker exec jenkins git config --global --add safe.directory '*'
+```
 
 ### Pipeline Stages
 
@@ -377,14 +280,14 @@ Tools installed inside the container after first launch: Docker CLI, Azure CLI, 
 | Checkout | Pulls latest code from GitHub |
 | SAST — SonarQube | Scans Python source code for bugs and security hotspots |
 | SCA — Snyk | Scans dependencies for known CVEs |
-| Build Docker Image | Builds and tags container image with build number |
-| Container Scan — Trivy | Scans built image for OS-level CVEs |
+| Build Docker Image | Builds and tags container image with Jenkins build number |
+| Container Scan — Trivy | Scans built image for OS-level CVEs before push |
 | Push to ACR | Pushes tagged image to Azure Container Registry |
 | Deploy to Container App | Updates running container via Azure CLI Service Principal |
-| Ansible Verification | Structured post-deploy health checks |
+| Ansible Verification | Structured post-deploy health checks against live URL |
 | Smoke Test | Final `/health` endpoint confirmation |
 
-### Credentials Management
+### Credentials
 
 | Credential ID | Purpose |
 |---|---|
@@ -394,13 +297,13 @@ Tools installed inside the container after first launch: Docker CLI, Azure CLI, 
 | `SONAR_TOKEN` | SonarQube analysis token |
 | `SNYK_TOKEN` | Snyk API token |
 
-**Key issues resolved:**
+### Key Issues Resolved
 
 | Issue | Resolution |
 |---|---|
-| Docker permission denied | Running as root (`-u root`) gives permanent socket access |
-| `az login` state not shared between containers | Installed Azure CLI directly in Jenkins — login persists in same shell session |
-| Git safe directory error | `git config --global --add safe.directory '*'` inside container |
+| Docker permission denied on every restart | Running as root (`-u root`) gives permanent socket access |
+| `az login` state not persisting | Installed Azure CLI directly in Jenkins — login persists in same shell session |
+| Git safe directory error after container recreation | `git config --global --add safe.directory '*'` inside container |
 
 ---
 
@@ -408,27 +311,7 @@ Tools installed inside the container after first launch: Docker CLI, Azure CLI, 
 
 **Source:** [`ansible/playbook.yml`](./ansible/playbook.yml)
 
-### Why Ansible
-
-The smoke test catches a completely broken deployment. Ansible runs a deeper structured pass — verifying response content, response time, and specific JSON fields — with named tasks and clear pass/fail output. It also proves configuration management as a skill, separate from the shell scripting visible in the Jenkinsfile.
-
-### Playbook Structure
-
-```yaml
----
-- name: Post-deploy verification for Click Arena
-  hosts: localhost
-  connection: local
-  vars:
-    app_url: "https://click-arena.mangobush-de01fc2e.eastus.azurecontainerapps.io"
-  tasks:
-    - name: Wait for app to be ready
-    - name: Check health endpoint
-    - name: Verify health response content
-    - name: Verify response time is acceptable
-    - name: Verify health response has expected fields
-    - name: Print health response
-```
+Ansible runs a structured verification playbook after every deploy before the pipeline is marked green. It verifies response content, response time, and specific JSON fields — deeper than the smoke test which only checks HTTP 200.
 
 ### Verification Tasks
 
@@ -441,11 +324,9 @@ The smoke test catches a completely broken deployment. Ansible runs a deeper str
 | Verify expected fields | `assert` | Response contains `players` and `targets` fields |
 | Print health response | `debug` | Prints full response to pipeline logs |
 
-### Pipeline Output
-
 <figure>
   <img src="screenshots/03-ansible-build.png" width="600">
-  <figcaption>Ansible playbook running inside the Jenkins pipeline — all 7 tasks passing</figcaption>
+  <figcaption>All 7 Ansible tasks passing in the Jenkins pipeline</figcaption>
 </figure>
 
 ```
@@ -471,51 +352,183 @@ Three security tools run automatically in the Jenkins pipeline before any image 
 
 ### SAST — SonarQube
 
-SonarQube reads Python source code without running it, looking for bugs and security vulnerabilities. A local SonarQube server (`localhost:9000`) runs in Docker. The scanner runs as a Jenkins pipeline stage before the Docker build.
+SonarQube reads Python source code without running it, checking for bugs and security vulnerabilities. Runs as a local Docker container (`localhost:9000`). `host.docker.internal` is used as the SonarQube URL from Jenkins because `localhost` inside a Docker container refers to the container itself, not the host machine.
 
-`host.docker.internal` is used as the SonarQube URL because Jenkins runs inside a Docker container — `localhost` inside a container refers to the container itself, not the Mac host.
+<img src="docs/screenshots/03-Initial-SonarQube-Scan.png" width="500">
 
 **First scan findings:**
 
-| Finding | Severity | Description | Resolution |
-|---|---|---|---|
-| CSRF hotspot | High | `cors_allowed_origins="*"` on SocketIO | Restricted to known URLs |
-| Weak PRNG | Medium | `random.randint()` in `game.py` (×3) | Marked Safe — non-cryptographic game context |
-| Missing resource integrity | Low | CDN script tag missing `integrity` attribute | Accepted |
-| Missing `lang` attribute | Bug | `<html>` missing `lang="en"` | Fixed directly |
+| Finding | Severity | Resolution |
+|---|---|---|
+| CSRF — `cors_allowed_origins="*"` | High | Fixed: restricted to known Azure and localhost URLs |
+| Weak PRNG — `random.randint()` in `game.py` x3 | Medium | Marked Safe — game target position generation, no security implication |
+| Missing resource integrity on CDN script | Low | Accepted |
+| Missing `lang` attribute on `<html>` | Bug | Fixed: added `lang="en"` |
 
-The CSRF fix restricted allowed origins to the Azure URL and localhost:
-
-```python
-socketio = SocketIO(app, cors_allowed_origins=[
-    "https://click-arena.mangobush-de01fc2e.eastus.azurecontainerapps.io",
-    "http://localhost:8080",
-    "http://localhost:5000"
-], async_mode='threading')
-```
-
-The pseudorandom number generator findings were reviewed and marked **Safe** in SonarQube with documented reasoning — `random.randint()` generating game target positions has no security implication. This is the correct professional workflow: not every hotspot requires a code change, some require a human review and a documented decision.
+The pseudorandom number generator findings are Security Hotspots — SonarQube flags them for human review, not as confirmed vulnerabilities. After reviewing and documenting the reasoning, they were marked Safe in the SonarQube dashboard. This is the correct professional workflow: not every hotspot requires a code change.
 
 ### SCA — Snyk
 
-Snyk scans `requirements.txt` for known CVEs in Flask, Flask-SocketIO, and their transitive dependencies. This catches the class of vulnerability exemplified by Log4Shell — where a trusted, widely-used dependency contains a critical flaw that affects every application using it, regardless of how clean the application code is.
+Snyk scans `requirements.txt` for known CVEs in Flask, Flask-SocketIO, and their transitive dependencies. This is the class of vulnerability exemplified by Log4Shell — a trusted, widely-used library containing a critical flaw that affects every application using it regardless of how clean the application code is.
 
-Snyk runs on every build and reports findings without blocking the pipeline (`|| true`). The intent is visibility — knowing what vulnerabilities exist in the dependency tree even if not all can be immediately remediated.
+Runs on every build with `--skip-unresolved` and reports without blocking the pipeline. The Snyk pip scanner requires Python in the PATH to resolve the full dependency tree — in the Jenkins container environment this caused consistent scan failures despite successful authentication. A known CLI/environment compatibility issue documented here for transparency.
 
 ### Container Scan — Trivy
 
-Trivy scans the built Docker image for OS-level CVEs in the Debian packages baked into `python:3.11-slim`. This is distinct from Snyk which scans Python dependencies — Trivy operates at the image layer level, examining everything installed in the base image.
+Trivy scans the built Docker image for OS-level CVEs in the Debian packages baked into `python:3.11-slim`. Distinct from Snyk which scans Python dependencies — Trivy operates at the image layer level.
 
-Reports HIGH and CRITICAL findings only. Does not block the pipeline (`--exit-code 0`) — findings are printed to the console on every build, making vulnerability trends visible over time.
+```
+trivy image \
+    --exit-code 0 \
+    --severity HIGH,CRITICAL \
+    --format table \
+    click-arena:${IMAGE_TAG}
+```
 
-> *CVEs in base images are expected and unavoidable. `python:3.11-slim` is Debian-based and will always have some OS-level findings. The correct response is to track them, understand which are exploitable in the application's threat model, and update the base image periodically. Real DevSecOps is about informed risk management, not zero-tolerance blocking.*
+CVEs in base images are expected. `python:3.11-slim` is Debian-based and will always have some OS-level findings. The correct response is to track them and update the base image periodically — not zero-tolerance blocking. `--exit-code 0` reports findings without failing the pipeline.
+
+---
+
+## Cloudflare Worker — Edge Middleware
+
+**Source:** [`cloudflare/click-arena-headers/src/index.js`](./cloudflare/click-arena-headers/src/index.js)
+
+A Cloudflare Worker deployed to `clickarena.vanshbhardwaj.com` intercepts every HTTP request before it reaches Azure. Deployed and managed via Wrangler CLI, version controlled alongside the rest of the project.
+
+### Architecture
+
+```
+Browser
+  ↓
+Cloudflare Edge (DDoS protection, SSL termination)
+  ↓
+Cloudflare Worker (runs on every request)
+  ├── Checks path — public or protected?
+  ├── Validates X-API-Key header on protected routes
+  ├── Forwards allowed requests to Azure
+  └── Injects security headers on every response
+  ↓
+Azure Container App
+```
+
+### How it works
+
+The Worker has three responsibilities:
+
+**1. API key middleware**
+
+Every request path is checked against a public paths list. Public routes (`/`, `/health`, `/favicon.ico`) pass through without validation. All other routes require a valid `X-API-Key` header. Invalid or missing keys return a 401 immediately — the Azure app never sees the request.
+
+```javascript
+const isPublic = PUBLIC_PATHS.includes(path) || path.startsWith('/socket.io');
+
+if (isPublic) {
+    return forwardToAzure(azureUrl, req);
+} else {
+    const apiKey = req.headers.get('X-API-Key');
+    if (VALID_API_KEYS.has(apiKey)) {
+        stats.allowed += 1;
+        return forwardToAzure(azureUrl, req);
+    } else {
+        stats.blocked += 1;
+        return new Response("Blocked - invalid API key", { status: 401 });
+    }
+}
+```
+
+A `Set` is used for `VALID_API_KEYS` rather than an array — O(1) lookup vs O(n) for array iteration. At request volume this difference matters.
+
+**2. Security header injection**
+
+HTTP responses from `fetch()` are immutable. To add headers, the response is cloned into a new mutable `Response` object, headers are added, and the modified copy is returned to the browser.
+
+```javascript
+async function forwardToAzure(azureUrl, req) {
+    const azureResponse = await fetch(azureUrl, {
+        method: req.method,
+        headers: req.headers,
+        body: req.method !== 'GET' ? req.body : null
+    });
+
+    const newResponse = new Response(azureResponse.body, azureResponse);
+
+    newResponse.headers.set('X-Frame-Options', 'DENY');
+    newResponse.headers.set('X-Content-Type-Options', 'nosniff');
+    newResponse.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+    newResponse.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    newResponse.headers.set('Content-Security-Policy',
+        "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'");
+
+    return newResponse;
+}
+```
+
+These headers tell the browser how to behave when rendering the page — blocking clickjacking, preventing MIME sniffing, restricting script sources, and disabling unused hardware features. They protect the user, not the server.
+
+**3. Scheduled audit cron job**
+
+A cron trigger fires every 5 minutes and logs request statistics to Cloudflare's observability dashboard.
+
+```javascript
+async scheduled(event, env, ctx) {
+    console.log('[AUDIT] ' + new Date().toISOString());
+    console.log('[AUDIT] Allowed: ' + stats.allowed);
+    console.log('[AUDIT] Blocked: ' + stats.blocked);
+    console.log('[AUDIT] Total Requests: ' + stats.total);
+
+    let blockRate;
+    if (stats.total > 0) {
+        blockRate = ((stats.blocked / stats.total) * 100).toFixed(1);
+    } else {
+        blockRate = 0;
+    }
+    console.log('[AUDIT] Block Rate: ' + blockRate + '%');
+}
+```
+
+### Deployment
+
+```bash
+cd cloudflare/click-arena-headers
+wrangler deploy
+```
+
+### Verification
+
+```bash
+# Security headers present on every response
+curl -sI https://clickarena.vanshbhardwaj.com/health
+# → x-frame-options: DENY
+# → content-security-policy: default-src 'self'...
+# → x-content-type-options: nosniff
+# → referrer-policy: strict-origin-when-cross-origin
+# → permissions-policy: camera=(), microphone=(), geolocation=()
+
+# Protected route blocked without key
+curl https://clickarena.vanshbhardwaj.com/stats
+# → 401 Blocked - invalid API key
+
+# Protected route accessible with valid key
+curl -H "X-API-Key: sk_arena_dev_123" https://clickarena.vanshbhardwaj.com/stats
+# → {"active_players":0,"messages_sent":5,"status":"live"}
+```
+
+### Key Issues Resolved
+
+| Issue | Resolution |
+|---|---|
+| SSL error 525 on custom domain | Cloudflare SSL mode was set to Full Strict — Azure cert not verified by Cloudflare. Changed to Full |
+| ERR_TOO_MANY_REDIRECTS | Flexible SSL mode causes infinite redirect loop — Azure redirects HTTP to HTTPS which loops back through Cloudflare. Changed to Full |
+| Worker returning fake strings instead of game | Worker intercepted traffic before forwarding logic was written — detached route from domain until Worker was complete |
+| WebSocket connections broken through proxy | Flask-SocketIO WebSocket upgrade incompatible with Cloudflare Worker proxying — game served directly from Azure URL, Worker handles HTTP API routes |
+| Response headers immutable | HTTP responses from `fetch()` are read-only — cloned into new `Response` object before adding headers |
 
 ---
 
 ## What's Next
 
-- **OWASP ZAP** — dynamic scan against the live Azure URL, testing the running application like an attacker would — checking for missing security headers, XSS via the chat input, clickjacking vulnerabilities, and other runtime issues that static scanning cannot detect
-- **Azure Monitor + Grafana** — live dashboard showing active WebSocket connections, request latency, and container memory usage
-- **Azure Key Vault** — secrets management for the Snyk token, SonarQube token, and ACR credentials, replacing the current Jenkins credential store
+- **OWASP ZAP** — dynamic scan against the live Azure URL, attacking the running application like a real adversary. Expected to find missing headers (already fixed by the Worker), XSS vectors via the chat input, and clickjacking vulnerabilities
+- **Azure Monitor + Grafana** — live dashboard showing active WebSocket connections, request latency, and container memory usage. Log Analytics Workspace is already collecting data — Grafana connects to it as a data source
+- **Gitleaks** — scan git history for accidentally committed secrets. The hardcoded `SECRET_KEY` in `server.py` is a real finding waiting to be caught
 
 ---
