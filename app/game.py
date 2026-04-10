@@ -6,8 +6,6 @@ import random
 import time
 import threading
 
-apikey = "secret_api_key_123"
-
 def make_target():
     return {
         'id': random.randint(1000, 9999),
