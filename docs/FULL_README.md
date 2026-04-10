@@ -3,7 +3,6 @@
 
 <figure>
   <img src="screenshots/01-Pipeline-Architecture.png" width="1000">
-  <figcaption>Build history showing failures during debugging, ending in a successful green build</figcaption>
 </figure>
 
 
