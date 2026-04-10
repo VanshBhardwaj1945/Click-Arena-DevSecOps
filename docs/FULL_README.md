@@ -525,7 +525,7 @@ curl -H "X-API-Key: sk_arena_dev_123" https://clickarena.vanshbhardwaj.com/stats
 
 ---
 
-## What's Next
+## What is Next
 
 - **OWASP ZAP** — dynamic scan against the live Azure URL, attacking the running application like a real adversary. Expected to find missing headers (already fixed by the Worker), XSS vectors via the chat input, and clickjacking vulnerabilities
 - **Azure Monitor + Grafana** — live dashboard showing active WebSocket connections, request latency, and container memory usage. Log Analytics Workspace is already collecting data — Grafana connects to it as a data source
