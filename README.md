@@ -1,5 +1,9 @@
 # Click Arena — DevSecOps Pipeline on Azure
 
+<figure>
+  <img src="docs/screenshots/01-Pipeline-Architecture.png" width="1000">
+</figure>
+
 > A real-time multiplayer browser game used as a vehicle for building and demonstrating a production-grade DevSecOps pipeline on Azure.
 > The game is intentionally simple. **The infrastructure is the point.**
 
