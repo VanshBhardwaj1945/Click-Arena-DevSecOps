@@ -3,7 +3,7 @@
 > A real-time multiplayer browser game used as a vehicle for building and demonstrating a production-grade DevSecOps pipeline on Azure.
 > The game is intentionally simple. **The infrastructure is the point.**
 
-**[Play the game](https://click-arena.mangobush-de01fc2e.eastus.azurecontainerapps.io)** &nbsp;|&nbsp; **[Full documentation](docs/FULL_README.md)**
+**[Play the game](https://clickarena.vanshbhardwaj.com/)** &nbsp;|&nbsp; **[Full documentation](docs/FULL_README.md)**
 
 ---
 
@@ -12,7 +12,7 @@
 A complete DevSecOps pipeline — from local development to a live, security-scanned deployment on Azure. Every tool has a real job. Nothing is a tutorial exercise.
 
 ```
-Code Push → Jenkins → SonarQube → Snyk → Docker Build → Trivy → ACR → Deploy → Ansible → Live
+Code Push → Jenkins → Gitleaks → SonarQube → Snyk → Docker Build → Trivy → ACR → Deploy → Ansible → Live
 ```
 
 ---
@@ -27,24 +27,23 @@ Code Push → Jenkins → SonarQube → Snyk → Docker Build → Trivy → ACR 
 | **Infrastructure** | Terraform, Azure CLI |
 | **CI/CD** | Jenkins (self-hosted, pipeline as code) |
 | **Config & Verify** | Ansible |
+| **Secret Detection** | Gitleaks (Jenkins pipeline + pre-commit hooks) |
 | **Edge Security** | Cloudflare Worker (header validation, API key middleware, cron audit) |
 | **SAST** | SonarQube |
 | **Dependency Scan** | Snyk |
 | **Container Scan** | Trivy |
-| **DAST** | OWASP ZAP — coming |
-| **Monitoring** | Azure Monitor + Grafana — coming |
+| **Monitoring** | Azure Monitor + Grafana |
 
 ---
 
 ## Pipeline
-
-<img src="docs/screenshots/02-Jenkins-Build-Success.png" width="379">
 
 The pipeline runs automatically on every push. Each stage must pass before the next begins.
 
 | Stage | Status |
 |---|---|
 | Checkout from GitHub | Complete |
+| Secret Scan — Gitleaks | Complete |
 | SAST — SonarQube code scan | Complete |
 | SCA — Snyk dependency scan | Complete |
 | Build Docker image | Complete |
@@ -53,17 +52,16 @@ The pipeline runs automatically on every push. Each stage must pass before the n
 | Deploy to Azure Container Apps | Complete |
 | Ansible post-deploy verification | Complete |
 | Smoke test (`/health` endpoint) | Complete |
-| OWASP ZAP DAST scan | In progress |
 
 ---
 
 ## Security Scanning
 
-Three layers of automated security scanning run on every push before anything reaches production.
+Four layers of automated security scanning run on every push before anything reaches production.
 
-**SonarQube (SAST)** scans Python source code without running it. Found 5 security hotspots and 1 bug on the first scan — including a CSRF misconfiguration on the SocketIO initialization and a missing accessibility attribute. The CSRF finding was remediated by restricting `cors_allowed_origins` to known URLs. The pseudorandom number generator findings were reviewed and marked safe — `random.randint()` generating game target positions has no security implication.
+**Gitleaks** scans the codebase for accidentally committed secrets — API keys, tokens, passwords. Also runs as a pre-commit hook locally, blocking commits before they ever reach GitHub. Two layers: catch it on your machine first, Jenkins as the safety net.
 
-<img src="docs/screenshots/03-Initial-SonarQube-Scan.png" width="500">
+**SonarQube (SAST)** scans Python source code without running it. Found 5 security hotspots and 1 bug on the first scan — including a CSRF misconfiguration on the SocketIO initialization. The CSRF finding was remediated. The pseudorandom number generator findings were reviewed and marked safe with documented reasoning.
 
 **Snyk (SCA)** scans `requirements.txt` for known CVEs in Flask, Flask-SocketIO, and their transitive dependencies. Runs on every build and reports without blocking the pipeline.
 
@@ -79,28 +77,20 @@ A Cloudflare Worker sits in front of the app at `clickarena.vanshbhardwaj.com` a
 Browser → Cloudflare Worker → Azure Container App
 ```
 
-The Worker does three things:
-
 **API key validation** — protected routes require a valid `X-API-Key` header. Requests without one are blocked at the edge and never reach Azure. Public routes (`/`, `/health`) pass through without a key.
 
-**Security header injection** — every response gets five HTTP security headers added before it reaches the browser: `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`.
+**Security header injection** — every response gets five HTTP security headers injected before it reaches the browser: `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`.
 
-**Scheduled audit** — a cron job fires every 5 minutes and logs total requests, allowed count, blocked count, and block rate percentage to Cloudflare's observability dashboard.
+**Scheduled audit** — a cron job fires every 5 minutes and logs total requests, allowed count, blocked count, and block rate percentage.
 
 ```bash
-# No key — blocked at the edge
+# Blocked without key
 curl https://clickarena.vanshbhardwaj.com/stats
 # → 401 Blocked - invalid API key
 
-# Valid key — passes through to Azure
+# Allowed with valid key
 curl -H "X-API-Key: sk_arena_dev_123" https://clickarena.vanshbhardwaj.com/stats
 # → {"active_players":0,"messages_sent":5,"status":"live"}
-
-# Security headers on every response
-curl -sI https://clickarena.vanshbhardwaj.com/health | grep -E "x-frame|content-security|x-content"
-# → x-frame-options: DENY
-# → content-security-policy: default-src 'self'...
-# → x-content-type-options: nosniff
 ```
 
 ---
@@ -108,8 +98,6 @@ curl -sI https://clickarena.vanshbhardwaj.com/health | grep -E "x-frame|content-
 ## Ansible Verification
 
 After every deploy, Ansible runs a structured verification playbook against the live Azure URL before the pipeline is marked green.
-
-<img src="docs/screenshots/03-ansible-build.png" width="600">
 
 ```
 TASK [Wait for app to be ready] ........... ok
@@ -121,6 +109,12 @@ TASK [Print health response] .............. ok — {'players': 0, 'status': 'ok'
 
 localhost: ok=7  changed=0  unreachable=0  failed=0  skipped=0
 ```
+
+---
+
+## Monitoring — Azure Monitor + Grafana
+
+Azure Container Apps ships all console output to Log Analytics automatically. Grafana connects to Azure Monitor as a data source and visualizes it in real time across three dashboard panels — total health check count, recent app logs table, and requests over time as a line graph.
 
 ---
 

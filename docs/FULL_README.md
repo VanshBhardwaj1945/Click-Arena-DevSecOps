@@ -13,14 +13,17 @@
 9. [CI/CD Pipeline with Jenkins](#cicd-pipeline-with-jenkins)
 10. [Post-Deploy Verification with Ansible](#post-deploy-verification-with-ansible)
 11. [Security Scanning](#security-scanning)
-12. [Cloudflare Worker — Edge Middleware](#cloudflare-worker--edge-middleware)
-13. [What's Next](#whats-next)
+12. [Secret Detection — Gitleaks](#secret-detection--gitleaks)
+13. [Cloudflare Worker — Edge Middleware](#cloudflare-worker--edge-middleware)
+14. [Monitoring — Azure Monitor + Grafana](#monitoring--azure-monitor--grafana)
 
 ---
 
 ## Overview
 
 Click Arena is a real-time multiplayer browser game built as a vehicle for learning and demonstrating a full DevSecOps pipeline on Azure. Players click targets that appear on screen and compete on a live leaderboard, with real-time chat between players.
+
+
 
 **The game is intentionally simple. The infrastructure is the point.**
 
@@ -38,7 +41,9 @@ Click Arena is a real-time multiplayer browser game built as a vehicle for learn
 - Static code analysis with SonarQube
 - Dependency vulnerability scanning with Snyk
 - Container image scanning with Trivy
+- Secret detection with Gitleaks (Jenkins pipeline + pre-commit hooks)
 - Edge middleware with Cloudflare Workers
+- Observability with Azure Monitor and Grafana
 - Cost-conscious Azure architecture (scales to zero when idle)
 
 ---
@@ -47,7 +52,7 @@ Click Arena is a real-time multiplayer browser game built as a vehicle for learn
 
 This project builds a full DevSecOps pipeline around a simple multiplayer game. Every tool in the stack has a real job — not a tutorial exercise. The game gives the pipeline something concrete to build, scan, deploy, and monitor.
 
-The pipeline covers the full lifecycle: code is scanned for vulnerabilities before it ships, packaged into a container, pushed to a private registry, deployed to Azure via infrastructure defined as code, and verified post-deploy. Security scanning runs automatically at every stage. A Cloudflare Worker sits at the edge adding HTTP security headers and protecting API routes.
+The pipeline covers the full lifecycle: code is scanned for secrets before it commits, scanned for vulnerabilities before it ships, packaged into a container, pushed to a private registry, deployed to Azure via infrastructure defined as code, verified post-deploy, and monitored in production via a live Grafana dashboard.
 
 This is being built and documented as a hands-on learning project while studying for the AZ-104 exam.
 
@@ -67,12 +72,13 @@ This is being built and documented as a hands-on learning project while studying
 | Terraform | Infrastructure as Code |
 | Jenkins | CI/CD pipeline orchestration |
 | Ansible | Post-deploy verification |
-| Cloudflare Worker | Edge middleware — security headers, API key validation, cron audit |
+| Gitleaks | Secret detection in CI pipeline and pre-commit |
 | SonarQube | Static code analysis / SAST |
 | Snyk | Dependency vulnerability scanning / SCA |
 | Trivy | Container image security scanning |
-| OWASP ZAP | Dynamic application security testing / DAST — coming |
-| Azure Monitor + Grafana | Metrics and monitoring — coming |
+| Cloudflare Worker | Edge middleware — security headers, API key validation, cron audit |
+| Azure Monitor | Log ingestion and metrics collection |
+| Grafana | Observability dashboard |
 | Git / GitHub | Version control |
 | Azure CLI | Resource management and scripting |
 
@@ -106,6 +112,8 @@ click-arena/
 │   └── Jenkinsfile            # CI/CD pipeline definition
 ├── docs/
 │   └── screenshots/           # Pipeline and deployment screenshots
+├── .pre-commit-config.yaml    # Pre-commit hooks configuration
+├── .gitleaks.toml             # Gitleaks allowlist for known false positives
 ├── Dockerfile                 # Container build instructions
 ├── .dockerignore              # Files excluded from Docker build context
 ├── .gitignore
@@ -120,7 +128,7 @@ The server is split across four files to keep concerns separate:
 
 - `state.py` holds shared in-memory game state — connected players, active targets, and the last 20 chat messages. Everything resets on restart. No database — scores are intentionally ephemeral because the pipeline is the point.
 - `game.py` registers all WebSocket event handlers: connect, join, click_target, chat_message, disconnect. A background thread keeps exactly three targets on screen at all times.
-- `routes.py` handles three HTTP routes: `/` serves the game page, `/health` returns a JSON status object used by Azure and Jenkins, `/stats` returns live game metrics and is protected by the Cloudflare Worker API key check.
+- `routes.py` handles three HTTP routes: `/` serves the game page, `/health` returns a JSON status object used by Azure and Jenkins, `/stats` returns live game metrics protected by the Cloudflare Worker API key check.
 - `server.py` is the entry point — initializes Flask and SocketIO, registers routes and events, starts the background target spawner.
 
 ### Running Locally
@@ -238,7 +246,6 @@ terraform apply
 ```
 
 ---
-
 ## CI/CD Pipeline with Jenkins
 
 <figure>
@@ -270,6 +277,10 @@ docker exec -it jenkins bash -c "
     unzip /tmp/sonar-scanner-cli-5.0.1.3006-linux.zip -d /opt &&
     ln -s /opt/sonar-scanner-5.0.1.3006-linux/bin/sonar-scanner /usr/local/bin/sonar-scanner
 "
+docker exec -it jenkins bash -c "
+    wget https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz -P /tmp &&
+    tar -xzf /tmp/gitleaks_8.18.2_linux_x64.tar.gz -C /usr/local/bin gitleaks
+"
 docker exec jenkins git config --global --add safe.directory '*'
 ```
 
@@ -278,6 +289,7 @@ docker exec jenkins git config --global --add safe.directory '*'
 | Stage | What it does |
 |---|---|
 | Checkout | Pulls latest code from GitHub |
+| Secret Scan — Gitleaks | Scans codebase for leaked secrets and credentials |
 | SAST — SonarQube | Scans Python source code for bugs and security hotspots |
 | SCA — Snyk | Scans dependencies for known CVEs |
 | Build Docker Image | Builds and tags container image with Jenkins build number |
@@ -354,7 +366,7 @@ Three security tools run automatically in the Jenkins pipeline before any image 
 
 SonarQube reads Python source code without running it, checking for bugs and security vulnerabilities. Runs as a local Docker container (`localhost:9000`). `host.docker.internal` is used as the SonarQube URL from Jenkins because `localhost` inside a Docker container refers to the container itself, not the host machine.
 
-<img src="docs/screenshots/03-Initial-SonarQube-Scan.png" width="500">
+<img src="screenshots/03-Initial-SonarQube-Scan.png" width="500">
 
 **First scan findings:**
 
@@ -377,7 +389,7 @@ Runs on every build with `--skip-unresolved` and reports without blocking the pi
 
 Trivy scans the built Docker image for OS-level CVEs in the Debian packages baked into `python:3.11-slim`. Distinct from Snyk which scans Python dependencies — Trivy operates at the image layer level.
 
-```
+```bash
 trivy image \
     --exit-code 0 \
     --severity HIGH,CRITICAL \
@@ -385,7 +397,102 @@ trivy image \
     click-arena:${IMAGE_TAG}
 ```
 
-CVEs in base images are expected. `python:3.11-slim` is Debian-based and will always have some OS-level findings. The correct response is to track them and update the base image periodically — not zero-tolerance blocking. `--exit-code 0` reports findings without failing the pipeline.
+CVEs in base images are expected. `python:3.11-slim` is Debian-based and will always have some OS-level findings. The correct response is to track them and update the base image periodically. `--exit-code 0` reports findings without failing the pipeline.
+
+---
+
+## Secret Detection — Gitleaks
+
+**Source:** [`.gitleaks.toml`](./.gitleaks.toml) | [`.pre-commit-config.yaml`](./.pre-commit-config.yaml)
+
+Gitleaks scans for accidentally committed secrets — API keys, tokens, passwords, connection strings. It operates at a different layer from SonarQube: SonarQube reads code for logic and security flaws, Gitleaks specifically looks for credential patterns across every file and every commit in git history.
+
+This catches the real-world scenario where a developer commits a secret, realizes the mistake, and deletes it in the next commit — the secret is still in git history forever and anyone who clones the repo can retrieve it with `git log`.
+
+### Two layers of protection
+
+**Layer 1 — Jenkins pipeline stage**
+
+Runs on every build, scans the full codebase, reports findings without blocking:
+
+```groovy
+stage('Secret Scan — Gitleaks') {
+    steps {
+        echo '--- Scanning git history for leaked secrets ---'
+        sh 'gitleaks detect --source . --redact --no-git --verbose || true'
+    }
+}
+```
+
+`--redact` replaces actual secret values with `REDACTED` in output so findings are not logged in plain text. `--no-git` scans files as they are rather than walking every commit — faster for CI.
+
+**Layer 2 — Pre-commit hook**
+
+Runs locally before every `git commit`, blocking the commit if secrets are found. The secret never reaches GitHub at all.
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: check-yaml
+      - id: check-json
+      - id: detect-private-key
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.2
+    hooks:
+      - id: gitleaks
+```
+
+Install the hooks:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+A blocked commit looks like this:
+
+```
+Detect hardcoded secrets ... Failed
+Finding:  apikey = "REDACTED"
+File:     app/game.py
+Line:     9
+```
+
+### Defense in depth
+
+```
+Developer commits code
+        ↓
+Pre-commit hook — blocks commit if secret found
+        ↓
+Code reaches GitHub
+        ↓
+Jenkins Gitleaks stage — catches anything that slipped through
+        ↓
+Code deploys to Azure
+```
+
+Pre-commit hooks are local — someone could bypass them with `git commit --no-verify`. The Jenkins stage is the safety net that catches those cases.
+
+### False positive management
+
+Gitleaks flagged `password_secret_name` in `terraform/main.tf` — a Terraform variable name referencing a secret, not an actual credential. Rather than whitelisting the entire file:
+
+```toml
+# .gitleaks.toml
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known false positives"
+stopWords = ["password_secret_name"]
+```
+
+`stopWords` ignores findings containing that exact string. Real passwords committed to the Terraform file with any other variable name would still be caught.
 
 ---
 
@@ -413,30 +520,11 @@ Azure Container App
 
 ### How it works
 
-The Worker has three responsibilities:
-
 **1. API key middleware**
 
 Every request path is checked against a public paths list. Public routes (`/`, `/health`, `/favicon.ico`) pass through without validation. All other routes require a valid `X-API-Key` header. Invalid or missing keys return a 401 immediately — the Azure app never sees the request.
 
-```javascript
-const isPublic = PUBLIC_PATHS.includes(path) || path.startsWith('/socket.io');
-
-if (isPublic) {
-    return forwardToAzure(azureUrl, req);
-} else {
-    const apiKey = req.headers.get('X-API-Key');
-    if (VALID_API_KEYS.has(apiKey)) {
-        stats.allowed += 1;
-        return forwardToAzure(azureUrl, req);
-    } else {
-        stats.blocked += 1;
-        return new Response("Blocked - invalid API key", { status: 401 });
-    }
-}
-```
-
-A `Set` is used for `VALID_API_KEYS` rather than an array — O(1) lookup vs O(n) for array iteration. At request volume this difference matters.
+A `Set` is used for `VALID_API_KEYS` rather than an array — O(1) lookup vs O(n) for array iteration.
 
 **2. Security header injection**
 
@@ -451,58 +539,28 @@ async function forwardToAzure(azureUrl, req) {
     });
 
     const newResponse = new Response(azureResponse.body, azureResponse);
-
     newResponse.headers.set('X-Frame-Options', 'DENY');
     newResponse.headers.set('X-Content-Type-Options', 'nosniff');
     newResponse.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
     newResponse.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     newResponse.headers.set('Content-Security-Policy',
         "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'");
-
     return newResponse;
 }
 ```
 
-These headers tell the browser how to behave when rendering the page — blocking clickjacking, preventing MIME sniffing, restricting script sources, and disabling unused hardware features. They protect the user, not the server.
-
 **3. Scheduled audit cron job**
 
-A cron trigger fires every 5 minutes and logs request statistics to Cloudflare's observability dashboard.
-
-```javascript
-async scheduled(event, env, ctx) {
-    console.log('[AUDIT] ' + new Date().toISOString());
-    console.log('[AUDIT] Allowed: ' + stats.allowed);
-    console.log('[AUDIT] Blocked: ' + stats.blocked);
-    console.log('[AUDIT] Total Requests: ' + stats.total);
-
-    let blockRate;
-    if (stats.total > 0) {
-        blockRate = ((stats.blocked / stats.total) * 100).toFixed(1);
-    } else {
-        blockRate = 0;
-    }
-    console.log('[AUDIT] Block Rate: ' + blockRate + '%');
-}
-```
-
-### Deployment
-
-```bash
-cd cloudflare/click-arena-headers
-wrangler deploy
-```
+A cron trigger fires every 5 minutes and logs request statistics — total requests, allowed, blocked, and block rate percentage — to Cloudflare's observability dashboard.
 
 ### Verification
 
 ```bash
-# Security headers present on every response
+# Security headers on every response
 curl -sI https://clickarena.vanshbhardwaj.com/health
 # → x-frame-options: DENY
-# → content-security-policy: default-src 'self'...
 # → x-content-type-options: nosniff
-# → referrer-policy: strict-origin-when-cross-origin
-# → permissions-policy: camera=(), microphone=(), geolocation=()
+# → content-security-policy: default-src 'self'...
 
 # Protected route blocked without key
 curl https://clickarena.vanshbhardwaj.com/stats
@@ -517,18 +575,102 @@ curl -H "X-API-Key: sk_arena_dev_123" https://clickarena.vanshbhardwaj.com/stats
 
 | Issue | Resolution |
 |---|---|
-| SSL error 525 on custom domain | Cloudflare SSL mode was set to Full Strict — Azure cert not verified by Cloudflare. Changed to Full |
-| ERR_TOO_MANY_REDIRECTS | Flexible SSL mode causes infinite redirect loop — Azure redirects HTTP to HTTPS which loops back through Cloudflare. Changed to Full |
-| Worker returning fake strings instead of game | Worker intercepted traffic before forwarding logic was written — detached route from domain until Worker was complete |
-| WebSocket connections broken through proxy | Flask-SocketIO WebSocket upgrade incompatible with Cloudflare Worker proxying — game served directly from Azure URL, Worker handles HTTP API routes |
-| Response headers immutable | HTTP responses from `fetch()` are read-only — cloned into new `Response` object before adding headers |
+| SSL error 525 on custom domain | Cloudflare SSL mode set to Full Strict — changed to Full |
+| ERR_TOO_MANY_REDIRECTS | Flexible SSL causes infinite redirect loop — changed to Full |
+| Worker returning fake strings | Worker intercepted traffic before forwarding logic was complete — detached route until finished |
+| WebSocket connections broken | Flask-SocketIO WebSocket upgrade incompatible with Worker proxying — game served from Azure URL directly |
+| Response headers immutable | Cloned response into new `Response` object before adding headers |
 
 ---
 
-## What is Next
+## Monitoring — Azure Monitor + Grafana
 
-- **OWASP ZAP** — dynamic scan against the live Azure URL, attacking the running application like a real adversary. Expected to find missing headers (already fixed by the Worker), XSS vectors via the chat input, and clickjacking vulnerabilities
-- **Azure Monitor + Grafana** — live dashboard showing active WebSocket connections, request latency, and container memory usage. Log Analytics Workspace is already collecting data — Grafana connects to it as a data source
-- **Gitleaks** — scan git history for accidentally committed secrets. The hardcoded `SECRET_KEY` in `server.py` is a real finding waiting to be caught
+Grafana running locally at `localhost:3000`, connected to Azure Log Analytics Workspace `click-arena-logs`.
+
+Azure Container Apps automatically ships all console output to the connected Log Analytics Workspace. Every HTTP request, every Flask print statement, every health check lands in `ContainerAppConsoleLogs_CL`. Grafana connects to Azure Monitor as a data source and visualizes this data in real time.
+
+### Architecture
+
+```
+Container App console output
+        ↓
+Azure Log Analytics Workspace (click-arena-logs)
+        ↓
+Azure Monitor API
+        ↓
+Grafana (Azure Monitor data source)
+        ↓
+Live dashboard
+```
+
+### Setup
+
+```bash
+# Run Grafana locally
+docker run -d \
+  --name grafana \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  grafana/grafana
+
+# Create a read-only Service Principal for Grafana
+az ad sp create-for-rbac \
+  --name "grafana-monitor" \
+  --role "Monitoring Reader" \
+  --scopes /subscriptions/YOUR_SUB_ID
+```
+
+In Grafana → Connections → Data Sources → Add → Azure Monitor. Fill in tenant ID, client ID, and client secret from the Service Principal output. Click Save & Test.
+
+### Dashboard
+
+<img src="screenshots/04-Grafana-Dashboard.png" width="700">
+
+Three panels built using KQL — Kusto Query Language, Microsoft's log query language for Azure Monitor and Log Analytics:
+
+**Total Health Checks — Stat panel**
+
+```kusto
+ContainerAppConsoleLogs_CL
+| where Log_s contains "health"
+| count
+```
+
+A single number showing total `/health` calls since the workspace started collecting. Every Jenkins build, every Ansible verification, and every Azure health probe contributes.
+
+**Recent App Logs — Table panel**
+
+```kusto
+ContainerAppConsoleLogs_CL
+| project TimeGenerated, Log_s
+| order by TimeGenerated desc
+| take 20
+```
+
+Live scrolling table of the 20 most recent log entries — health checks, WebSocket connections, app startup messages.
+
+**Requests Over Time — Time series panel**
+
+```kusto
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s == "click-arena"
+| summarize RequestCount=count() by bin(TimeGenerated, 5m)
+| order by TimeGenerated asc
+```
+
+Line graph showing app activity grouped into 5 minute buckets. Spikes correspond to Jenkins pipeline runs.
+
+### KQL structure
+
+```
+TableName          ← source table
+| where            ← filter rows
+| project          ← select specific columns
+| summarize        ← aggregate and group
+| order by         ← sort results
+| take             ← limit number of rows returned
+```
+
+The `_s` suffix on column names (`Log_s`, `ContainerAppName_s`) indicates string type — Azure adds type suffixes to all custom log columns automatically.
 
 ---
