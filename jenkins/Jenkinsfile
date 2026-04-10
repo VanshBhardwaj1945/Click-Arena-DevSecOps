@@ -22,7 +22,7 @@ pipeline {
         stage('Secret Scan — Gitleaks') {
             steps {
                 echo '--- Scanning git history for leaked secrets ---'
-                sh 'gitleaks detect --source . --redact --no-git || true'
+                sh 'gitleaks detect --source . --redact --no-git --verbose || true'
 
             }
         }
