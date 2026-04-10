@@ -1,5 +1,13 @@
 # Click Arena — DevSecOps Pipeline Project
 
+
+<figure>
+  <img src="screenshots/01-Pipeline-Architecture.png" width="1000">
+  <figcaption>Build history showing failures during debugging, ending in a successful green build</figcaption>
+</figure>
+
+
+
 ## Table of Contents
 
 1. [Overview](#overview)
@@ -22,7 +30,6 @@
 ## Overview
 
 Click Arena is a real-time multiplayer browser game built as a vehicle for learning and demonstrating a full DevSecOps pipeline on Azure. Players click targets that appear on screen and compete on a live leaderboard, with real-time chat between players.
-
 
 
 **The game is intentionally simple. The infrastructure is the point.**
